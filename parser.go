@@ -8,10 +8,11 @@ import (
 
 var (
 	expressionLexer = lexer.Must(ebnf.New(`
-		Hex = ("0" "x") { hexdigit } .
+		Hex = ("0" "x") hexdigit { hexdigit } .
 		Ident = (alpha | "_") { "_" | "." | alpha | digit } .
 		String = "\"" { "\u0000"…"\uffff"-"\""-"\\" | "\\" any } "\"" .
-		Octal = "0" { octaldigit } .
+		UnixSystemPath = "/" alpha { alpha | digit | "-" | "." | "_" | "/" } ["*" [ "." { alpha | digit } ] ].
+		Octal = "0" octaldigit { octaldigit } .
 		Decimal = [ "-" | "+" ] digit { digit } .
 		Punct = "!"…"/" | ":"…"@" | "["…` + "\"`\"" + ` | "{"…"~" .
 		Whitespace = ( " " | "\t" ) { " " | "\t" } .
@@ -22,17 +23,16 @@ var (
 		any = "\u0000"…"\uffff" .
 	`))
 
-	expressionParser = participle.MustBuild(&Expression{},
+	expressionOptions = []participle.Option{
 		participle.Lexer(expressionLexer),
 		participle.Unquote("String"),
 		participle.UseLookahead(2),
 		participle.Elide("Whitespace"),
-	)
+	}
 
-	iterableParser = participle.MustBuild(&IterableExpression{},
-		participle.Lexer(expressionLexer),
-		participle.Unquote("String"),
-		participle.UseLookahead(2),
-		participle.Elide("Whitespace"),
-	)
+	expressionParser = participle.MustBuild(&Expression{}, expressionOptions...)
+
+	iterableParser = participle.MustBuild(&IterableExpression{}, expressionOptions...)
+
+	pathParser = participle.MustBuild(&PathExpression{}, expressionOptions...)
 )

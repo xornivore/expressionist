@@ -122,6 +122,13 @@ func (e *IterableExpression) iterate(it Iterator, expression *Expression, check 
 	return nil
 }
 
+func (e *PathExpression) Evaluate(ctx *Context) (interface{}, error) {
+	if e.Path != nil {
+		return *e.Path, nil
+	}
+	return e.Expression.Evaluate(ctx)
+}
+
 func (e *Expression) Evaluate(ctx *Context) (interface{}, error) {
 	lhs, err := e.Comparison.Evaluate(ctx)
 	if err != nil {

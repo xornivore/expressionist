@@ -182,5 +182,58 @@ func TestEvalIterable(t *testing.T) {
 			assert.Equal(test.result, value)
 		})
 	}
+}
 
+func TestEvalPathExpression(t *testing.T) {
+	ctx := &Context{
+		Functions: map[string]Function{
+			"shell.command.stdout": func(args ...interface{}) (interface{}, error) {
+				return "/etc/path-from-command", nil
+			},
+			"process.flag": func(args ...interface{}) (interface{}, error) {
+				return "/etc/path-from-process", nil
+			},
+		},
+	}
+
+	tests := []struct {
+		name       string
+		expression string
+		path       string
+	}{
+		{
+			name:       "path",
+			expression: `/etc/passwd`,
+			path:       `/etc/passwd`,
+		},
+		{
+			name:       "glob",
+			expression: `/var/run/*.sock`,
+			path:       `/var/run/*.sock`,
+		},
+		{
+			name:       "path from command",
+			expression: `shell.command.stdout("/usr/bin/find-my-path", "-v")`,
+			path:       "/etc/path-from-command",
+		},
+		{
+			name:       "path from process flag",
+			expression: `process.flag("kubelet", "--config")`,
+			path:       "/etc/path-from-process",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+
+			assert := assert.New(t)
+			expr, err := ParsePath(test.expression)
+			assert.NoError(err)
+			assert.NotNil(expr)
+
+			value, err := expr.Evaluate(ctx)
+			assert.NoError(err)
+			assert.Equal(test.path, value)
+		})
+	}
 }

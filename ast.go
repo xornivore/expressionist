@@ -22,6 +22,15 @@ func ParseIterable(s string) (*IterableExpression, error) {
 	return expr, nil
 }
 
+func ParsePath(s string) (*PathExpression, error) {
+	expr := &PathExpression{}
+	err := pathParser.ParseString(s, expr)
+	if err != nil {
+		return nil, err
+	}
+	return expr, nil
+}
+
 type Expression struct {
 	Pos lexer.Position
 
@@ -43,6 +52,13 @@ type IterableComparison struct {
 	Fn               *string           `@Ident`
 	Expression       *Expression       `"(" @@ ")"`
 	ScalarComparison *ScalarComparison `[ @@ ]`
+}
+
+type PathExpression struct {
+	Pos lexer.Position
+
+	Path       *string     `@UnixSystemPath`
+	Expression *Expression `| @@`
 }
 
 type Comparison struct {
