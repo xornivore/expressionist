@@ -21,28 +21,10 @@ var (
 		any = "\u0000"…"\uffff" .
 	`))
 
-	// 	seclLexer = lexer.Must(ebnf.New(`
-	// Ident = (alpha | "_") { "_" | alpha | digit | "." } .
-	// String = "\"" { "\u0000"…"\uffff"-"\""-"\\" | "\\" any } "\"" .
-	// Int = [ "-" | "+" ] digit { digit } .
-	// Punct = "!"…"/" | ":"…"@" | "["…` + "\"`\"" + ` | "{"…"~" .
-	// Whitespace = ( " " | "\t" ) { " " | "\t" } .
-	// alpha = "a"…"z" | "A"…"Z" .
-	// digit = "0"…"9" .
-	// any = "\u0000"…"\uffff" .
-	// `))
-
 	parser = participle.MustBuild(&Expression{},
 		participle.Lexer(expressionLexer),
 		participle.Unquote("String"),
 		participle.UseLookahead(2),
 		participle.Elide("Whitespace"),
 	)
-
-	// parser = participle.MustBuild(&Expression{},
-	// 	participle.Lexer(expressionLexer),
-	// 	participle.CaseInsensitive("Ident"),
-	// 	participle.Unquote("String"),
-	// 	participle.UseLookahead(),
-	// )
 )
