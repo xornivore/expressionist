@@ -66,6 +66,18 @@ func TestEvalFilePermissions(t *testing.T) {
 	assert.NotNil(value)
 }
 
+func TestEvalArrayOperation(t *testing.T) {
+	assert := assert.New(t)
+	expr, err := Parse(`"abc" in ["abc", "def", 0]`)
+	assert.NoError(err)
+	assert.NotNil(expr)
+
+	ctx := &Context{}
+	value, err := expr.Evaluate(ctx)
+	assert.NoError(err)
+	assert.Equal(true, value)
+}
+
 func TestEvalListEnum(t *testing.T) {
 	assert := assert.New(t)
 	expr, err := Parse(`len(jq(".important-property")) == 0`)
@@ -88,5 +100,5 @@ func TestEvalListEnum(t *testing.T) {
 	}
 	value, err := expr.Evaluate(ctx)
 	assert.NoError(err)
-	assert.NotNil(value)
+	assert.Equal(true, value)
 }

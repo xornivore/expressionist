@@ -1,7 +1,7 @@
 package main
 
 import (
-	"errors"
+	"reflect"
 	"strconv"
 
 	"github.com/alecthomas/participle/lexer"
@@ -60,10 +60,33 @@ func (c *Comparison) Evaluate(ctx *Context) (interface{}, error) {
 	}
 	switch {
 	case c.ArrayComparison != nil:
-		return nil, errors.New("array comparison not yet supported")
+		if c.ArrayComparison.Array == nil {
+			return nil, lexer.Errorf(c.Pos, "missing rhs of array operation %s", *c.ArrayComparison.Op)
+		}
+
+		rhs, err := c.ArrayComparison.Array.Evaluate(ctx)
+		if err != nil {
+			return nil, err
+		}
+
+		array, ok := rhs.([]interface{})
+		if !ok {
+			return nil, lexer.Errorf(c.Pos, "expecting rhs of array operation %s to be an array", *c.ArrayComparison.Op)
+		}
+
+		switch *c.ArrayComparison.Op {
+		case "in":
+			return c.inArray(lhs, array)
+
+		case "not in":
+			return c.notInArray(lhs, array)
+		default:
+			return nil, lexer.Errorf(c.Pos, "unsupported array operation %s", *c.ArrayComparison.Op)
+		}
+
 	case c.ScalarComparison != nil:
 		if c.ScalarComparison.Next == nil {
-			return nil, errors.New("missing right hand side of comparison")
+			return nil, lexer.Errorf(c.Pos, "missing rhs of %s", *c.ScalarComparison.Op)
 		}
 		rhs, err := c.ScalarComparison.Next.Evaluate(ctx)
 		if err != nil {
@@ -74,6 +97,24 @@ func (c *Comparison) Evaluate(ctx *Context) (interface{}, error) {
 	default:
 		return lhs, nil
 	}
+}
+
+func (c *Comparison) inArray(value interface{}, array []interface{}) (interface{}, error) {
+	for _, rhs := range array {
+		if reflect.DeepEqual(value, rhs) {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+func (c *Comparison) notInArray(value interface{}, array []interface{}) (interface{}, error) {
+	for _, rhs := range array {
+		if reflect.DeepEqual(value, rhs) {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 func (c *Comparison) compare(lhs, rhs interface{}, op string) (interface{}, error) {
@@ -229,6 +270,25 @@ func (v *Value) Evaluate(ctx *Context) (interface{}, error) {
 	}
 
 	return nil, lexer.Errorf(v.Pos, "unsupported value type %s", repr.String(v))
+}
+
+func (a *Array) Evaluate(ctx *Context) (interface{}, error) {
+	if a.Ident != nil {
+		value, ok := ctx.Vars[*a.Ident]
+		if !ok {
+			return nil, lexer.Errorf(a.Pos, "unknown variable %q used as array", *a.Ident)
+		}
+		return value, nil
+	}
+	var result []interface{}
+	for _, value := range a.Values {
+		v, err := value.Evaluate(ctx)
+		if err != nil {
+			return nil, err
+		}
+		result = append(result, v)
+	}
+	return result, nil
 }
 
 func (c *Call) Evaluate(ctx *Context) (interface{}, error) {

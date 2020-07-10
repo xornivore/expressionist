@@ -63,9 +63,8 @@ type Unary struct {
 type Array struct {
 	Pos lexer.Position
 
-	Strings []string `"[" @String { "," @String } "]"`
-	Numbers []int    `| "[" @Int { "," @Int } "]"`
-	// TODO - lists of octal and hex numbers once needed
+	Values []Value `"[" @@ { "," @@ } "]"`
+
 	Ident *string `| @Ident`
 }
 
