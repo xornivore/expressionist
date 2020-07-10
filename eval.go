@@ -29,17 +29,21 @@ type Iterator interface {
 
 func (e *IterableExpression) Evaluate(it Iterator) (bool, error) {
 	if e.IterableComparison == nil {
+		result := true
 		err := e.iterate(it, e.Expression, func(ctx *Context, passed bool) bool {
 			if !passed {
+				result = false
 				// first failure terminates the iteration
 				// TODO: add reporting of ctx value here
 				return false
 			}
 			return true
 		})
+
 		if err != nil {
 			return false, err
 		}
+		return result, nil
 	}
 
 	if e.IterableComparison.Fn == nil {
@@ -66,6 +70,9 @@ func (e *IterableExpression) Evaluate(it Iterator) (bool, error) {
 
 	case "none":
 		return passedCount == 0, nil
+
+	case "any":
+		return passedCount != 0, nil
 
 	case "len":
 		if e.IterableComparison.ScalarComparison == nil {

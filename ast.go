@@ -96,7 +96,7 @@ type Value struct {
 
 	Hex           *string     `  @Hex`
 	Octal         *string     `| @Octal`
-	Decimal       *int64      `| @Int`
+	Decimal       *int64      `| @Decimal`
 	String        *string     `| @String`
 	Call          *Call       `| @@`
 	Variable      *string     `| @Ident`

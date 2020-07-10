@@ -98,47 +98,89 @@ func (i *testIterable) Done() bool {
 }
 
 func TestEvalIterable(t *testing.T) {
-	assert := assert.New(t)
-	expr, err := ParseIterable(`len(has("important-property") || file.permissions == 0644) == 2`)
-	assert.NoError(err)
-	assert.NotNil(expr)
-
-	iterable := &testIterable{
-		contexts: []*Context{
-			{
-				Functions: map[string]Function{
-					"has": func(args ...interface{}) (interface{}, error) {
-						return true, nil
-					},
-				},
-				Vars: map[string]interface{}{
-					"file.permissions": int64(0677),
+	contexts := []*Context{
+		{
+			Functions: map[string]Function{
+				"has": func(args ...interface{}) (interface{}, error) {
+					return true, nil
 				},
 			},
-			{
-				Functions: map[string]Function{
-					"has": func(args ...interface{}) (interface{}, error) {
-						return false, nil
-					},
-				},
-				Vars: map[string]interface{}{
-					"file.permissions": int64(0644),
+			Vars: map[string]interface{}{
+				"file.permissions": int64(0677),
+				"file.owner":       "root",
+			},
+		},
+		{
+			Functions: map[string]Function{
+				"has": func(args ...interface{}) (interface{}, error) {
+					return false, nil
 				},
 			},
-			{
-				Functions: map[string]Function{
-					"has": func(args ...interface{}) (interface{}, error) {
-						return false, nil
-					},
+			Vars: map[string]interface{}{
+				"file.permissions": int64(0644),
+				"file.owner":       "root",
+			},
+		},
+		{
+			Functions: map[string]Function{
+				"has": func(args ...interface{}) (interface{}, error) {
+					return false, nil
 				},
-				Vars: map[string]interface{}{
-					"file.permissions": int64(0),
-				},
+			},
+			Vars: map[string]interface{}{
+				"file.permissions": int64(0),
+				"file.owner":       "root",
 			},
 		},
 	}
 
-	value, err := expr.Evaluate(iterable)
-	assert.NoError(err)
-	assert.Equal(true, value)
+	tests := []struct {
+		name       string
+		expression string
+		result     bool
+	}{
+		{
+			name:       "len",
+			expression: `len(has("important-property") || file.permissions == 0644) == 2`,
+			result:     true,
+		},
+		{
+			name:       "all",
+			expression: `all(file.owner == "root")`,
+			result:     true,
+		},
+		{
+			name:       "none",
+			expression: `none(file.owner == "alice")`,
+			result:     true,
+		},
+		{
+			name:       "any",
+			expression: `any(file.owner == "alice")`,
+			result:     false,
+		},
+		{
+			name:       "no function",
+			expression: `file.owner == "alice"`,
+			result:     false,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			iterable := &testIterable{
+				contexts: contexts,
+			}
+
+			assert := assert.New(t)
+			expr, err := ParseIterable(test.expression)
+			assert.NoError(err)
+			assert.NotNil(expr)
+
+			value, err := expr.Evaluate(iterable)
+			assert.NoError(err)
+			assert.Equal(test.result, value)
+		})
+	}
+
 }
