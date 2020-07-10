@@ -21,7 +21,14 @@ var (
 		any = "\u0000"…"\uffff" .
 	`))
 
-	parser = participle.MustBuild(&Expression{},
+	expressionParser = participle.MustBuild(&Expression{},
+		participle.Lexer(expressionLexer),
+		participle.Unquote("String"),
+		participle.UseLookahead(2),
+		participle.Elide("Whitespace"),
+	)
+
+	iterableParser = participle.MustBuild(&IterableExpression{},
 		participle.Lexer(expressionLexer),
 		participle.Unquote("String"),
 		participle.UseLookahead(2),

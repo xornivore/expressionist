@@ -22,6 +22,99 @@ type Context struct {
 	Vars map[string]interface{}
 }
 
+type Iterator interface {
+	Next() (*Context, error)
+	Done() bool
+}
+
+func (e *IterableExpression) Evaluate(it Iterator) (bool, error) {
+	if e.IterableComparison == nil {
+		err := e.iterate(it, e.Expression, func(ctx *Context, passed bool) bool {
+			if !passed {
+				// first failure terminates the iteration
+				// TODO: add reporting of ctx value here
+				return false
+			}
+			return true
+		})
+		if err != nil {
+			return false, err
+		}
+	}
+
+	if e.IterableComparison.Fn == nil {
+		return false, lexer.Errorf(e.Pos, "expecting function for iterable comparison")
+	}
+
+	totalCount := 0
+	passedCount := 0
+	err := e.iterate(it, e.IterableComparison.Expression, func(ctx *Context, passed bool) bool {
+		totalCount++
+		if passed {
+			passedCount++
+		}
+		// TODO: can evaluate some pseudo-function cases here without the need to go through the entire list
+		return true
+	})
+	if err != nil {
+		return false, err
+	}
+
+	switch *e.IterableComparison.Fn {
+	case "all":
+		return passedCount == totalCount, nil
+
+	case "none":
+		return passedCount == 0, nil
+
+	case "len":
+		if e.IterableComparison.ScalarComparison == nil {
+			return false, lexer.Errorf(e.Pos, "expecting rhs of len() expression")
+		}
+
+		if e.IterableComparison.ScalarComparison.Op == nil {
+			return false, lexer.Errorf(e.Pos, "expecting operator for len() comparison")
+		}
+
+		rhs, err := e.IterableComparison.ScalarComparison.Next.Evaluate(&Context{}) // TODO: need some global context here
+		if err != nil {
+			return false, err
+		}
+
+		expectedCount, ok := rhs.(int64)
+		if !ok {
+			return false, lexer.Errorf(e.Pos, "expecting rhs for len() iterable comparison to be integer")
+		}
+
+		return compareInts(*e.IterableComparison.ScalarComparison.Op, int64(passedCount), expectedCount, e.Pos)
+	default:
+		return false, lexer.Errorf(e.Pos, "unexpected function for iterable comparison %s", *e.IterableComparison.Fn)
+	}
+}
+
+func (e *IterableExpression) iterate(it Iterator, expression *Expression, check func(ctx *Context, passed bool) bool) error {
+	for !it.Done() {
+		ctx, err := it.Next()
+		if err != nil {
+			return err
+		}
+
+		v, err := expression.Evaluate(ctx)
+		if err != nil {
+			return err
+		}
+		passed, ok := v.(bool)
+		if !ok {
+			return lexer.Errorf(e.Pos, "expected a boolean resuls of evaluation")
+		}
+
+		if !check(ctx, passed) {
+			break
+		}
+	}
+	return nil
+}
+
 func (e *Expression) Evaluate(ctx *Context) (interface{}, error) {
 	lhs, err := e.Comparison.Evaluate(ctx)
 	if err != nil {
@@ -120,27 +213,12 @@ func (c *Comparison) notInArray(value interface{}, array []interface{}) (interfa
 func (c *Comparison) compare(lhs, rhs interface{}, op string) (interface{}, error) {
 	switch lhs := lhs.(type) {
 	case int64:
+
 		rhs, ok := rhs.(int64)
 		if !ok {
 			return nil, lexer.Errorf(c.Pos, "rhs of %s must be an integer", op)
 		}
-		switch op {
-		case "==":
-			return lhs == rhs, nil
-		case "!=":
-			return lhs != rhs, nil
-		case "<":
-			return lhs < rhs, nil
-		case ">":
-			return lhs > rhs, nil
-		case "<=":
-			return lhs <= rhs, nil
-		case ">=":
-			return lhs >= rhs, nil
-
-		default:
-			return nil, lexer.Errorf(c.Pos, "unsupported operator %s for integer comparison", op)
-		}
+		return compareInts(op, lhs, rhs, c.Pos)
 	case string:
 		rhs, ok := rhs.(string)
 		if !ok {
@@ -164,6 +242,26 @@ func (c *Comparison) compare(lhs, rhs interface{}, op string) (interface{}, erro
 		}
 	default:
 		return nil, lexer.Errorf(c.Pos, "lhs of %s must be a number or string", op)
+	}
+}
+
+func compareInts(op string, lhs, rhs int64, pos lexer.Position) (bool, error) {
+	switch op {
+	case "==":
+		return lhs == rhs, nil
+	case "!=":
+		return lhs != rhs, nil
+	case "<":
+		return lhs < rhs, nil
+	case ">":
+		return lhs > rhs, nil
+	case "<=":
+		return lhs <= rhs, nil
+	case ">=":
+		return lhs >= rhs, nil
+
+	default:
+		return false, lexer.Errorf(pos, "unsupported operator %s for integer comparison", op)
 	}
 }
 

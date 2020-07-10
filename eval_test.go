@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -8,7 +9,7 @@ import (
 
 func TestEvalFunction(t *testing.T) {
 	assert := assert.New(t)
-	expr, err := Parse(`ping("pong") == "pong"`)
+	expr, err := ParseExpression(`ping("pong") == "pong"`)
 	assert.NoError(err)
 	assert.NotNil(expr)
 
@@ -28,7 +29,7 @@ func TestEvalFunction(t *testing.T) {
 
 func TestEvalOctal(t *testing.T) {
 	assert := assert.New(t)
-	expr, err := Parse(`0644`)
+	expr, err := ParseExpression(`0644`)
 	assert.NoError(err)
 	assert.NotNil(expr)
 
@@ -40,7 +41,7 @@ func TestEvalOctal(t *testing.T) {
 
 func TestEvalHex(t *testing.T) {
 	assert := assert.New(t)
-	expr, err := Parse(`0xff`)
+	expr, err := ParseExpression(`0xff`)
 	assert.NoError(err)
 	assert.NotNil(expr)
 
@@ -52,7 +53,7 @@ func TestEvalHex(t *testing.T) {
 
 func TestEvalFilePermissions(t *testing.T) {
 	assert := assert.New(t)
-	expr, err := Parse(`(file.permissions & 0644) == file.permissions`)
+	expr, err := ParseExpression(`(file.permissions & 0644) == file.permissions`)
 	assert.NoError(err)
 	assert.NotNil(expr)
 
@@ -68,7 +69,7 @@ func TestEvalFilePermissions(t *testing.T) {
 
 func TestEvalArrayOperation(t *testing.T) {
 	assert := assert.New(t)
-	expr, err := Parse(`"abc" in ["abc", "def", 0]`)
+	expr, err := ParseExpression(`"abc" in ["abc", "def", 0]`)
 	assert.NoError(err)
 	assert.NotNil(expr)
 
@@ -78,27 +79,66 @@ func TestEvalArrayOperation(t *testing.T) {
 	assert.Equal(true, value)
 }
 
-func TestEvalListEnum(t *testing.T) {
+type testIterable struct {
+	contexts []*Context
+	index    int
+}
+
+func (i *testIterable) Next() (*Context, error) {
+	if !i.Done() {
+		result := i.contexts[i.index]
+		i.index++
+		return result, nil
+	}
+	return nil, errors.New("out of bounds iteration")
+}
+
+func (i *testIterable) Done() bool {
+	return i.index >= len(i.contexts)
+}
+
+func TestEvalIterable(t *testing.T) {
 	assert := assert.New(t)
-	expr, err := Parse(`len(jq(".important-property")) == 0`)
+	expr, err := ParseIterable(`len(has("important-property") || file.permissions == 0644) == 2`)
 	assert.NoError(err)
 	assert.NotNil(expr)
 
-	jq := func(args ...interface{}) (interface{}, error) {
-		return "blah", nil
-	}
-
-	len := func(args ...interface{}) (interface{}, error) {
-		return int64(0), nil
-	}
-
-	ctx := &Context{
-		Functions: map[string]Function{
-			"jq":  jq,
-			"len": len,
+	iterable := &testIterable{
+		contexts: []*Context{
+			{
+				Functions: map[string]Function{
+					"has": func(args ...interface{}) (interface{}, error) {
+						return true, nil
+					},
+				},
+				Vars: map[string]interface{}{
+					"file.permissions": int64(0677),
+				},
+			},
+			{
+				Functions: map[string]Function{
+					"has": func(args ...interface{}) (interface{}, error) {
+						return false, nil
+					},
+				},
+				Vars: map[string]interface{}{
+					"file.permissions": int64(0644),
+				},
+			},
+			{
+				Functions: map[string]Function{
+					"has": func(args ...interface{}) (interface{}, error) {
+						return false, nil
+					},
+				},
+				Vars: map[string]interface{}{
+					"file.permissions": int64(0),
+				},
+			},
 		},
 	}
-	value, err := expr.Evaluate(ctx)
+
+	value, err := expr.Evaluate(iterable)
 	assert.NoError(err)
 	assert.Equal(true, value)
 }

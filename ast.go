@@ -4,9 +4,18 @@ import (
 	"github.com/alecthomas/participle/lexer"
 )
 
-func Parse(s string) (*Expression, error) {
+func ParseExpression(s string) (*Expression, error) {
 	expr := &Expression{}
-	err := parser.ParseString(s, expr)
+	err := expressionParser.ParseString(s, expr)
+	if err != nil {
+		return nil, err
+	}
+	return expr, nil
+}
+
+func ParseIterable(s string) (*IterableExpression, error) {
+	expr := &IterableExpression{}
+	err := iterableParser.ParseString(s, expr)
 	if err != nil {
 		return nil, err
 	}
@@ -16,10 +25,24 @@ func Parse(s string) (*Expression, error) {
 type Expression struct {
 	Pos lexer.Position
 
-	// EnumFunction `[ @( "len" )`
 	Comparison *Comparison `@@`
 	Op         *string     `[ @( "|" "|" | "&" "&" )`
 	Next       *Expression `  @@ ]`
+}
+
+type IterableExpression struct {
+	Pos lexer.Position
+
+	IterableComparison *IterableComparison `@@`
+	Expression         *Expression         `| @@`
+}
+
+type IterableComparison struct {
+	Pos lexer.Position
+
+	Fn               *string           `@Ident`
+	Expression       *Expression       `"(" @@ ")"`
+	ScalarComparison *ScalarComparison `[ @@ ]`
 }
 
 type Comparison struct {
