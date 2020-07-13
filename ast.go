@@ -4,33 +4,7 @@ import (
 	"github.com/alecthomas/participle/lexer"
 )
 
-func ParseExpression(s string) (*Expression, error) {
-	expr := &Expression{}
-	err := expressionParser.ParseString(s, expr)
-	if err != nil {
-		return nil, err
-	}
-	return expr, nil
-}
-
-func ParseIterable(s string) (*IterableExpression, error) {
-	expr := &IterableExpression{}
-	err := iterableParser.ParseString(s, expr)
-	if err != nil {
-		return nil, err
-	}
-	return expr, nil
-}
-
-func ParsePath(s string) (*PathExpression, error) {
-	expr := &PathExpression{}
-	err := pathParser.ParseString(s, expr)
-	if err != nil {
-		return nil, err
-	}
-	return expr, nil
-}
-
+// Expression represents basic expression syntax that can be evaluated for an Instance
 type Expression struct {
 	Pos lexer.Position
 
@@ -39,6 +13,7 @@ type Expression struct {
 	Next       *Expression `  @@ ]`
 }
 
+// Iterable represents an iterable expration that can be evaluated for an Iterator
 type IterableExpression struct {
 	Pos lexer.Position
 
@@ -46,6 +21,7 @@ type IterableExpression struct {
 	Expression         *Expression         `| @@`
 }
 
+// IterableComparison allows evaluating a builtin pseudo-funciion for an iterable expression
 type IterableComparison struct {
 	Pos lexer.Position
 
@@ -54,6 +30,7 @@ type IterableComparison struct {
 	ScalarComparison *ScalarComparison `[ @@ ]`
 }
 
+// PathExpression represents an expression evaluating to a file path or file glob
 type PathExpression struct {
 	Pos lexer.Position
 
@@ -61,6 +38,7 @@ type PathExpression struct {
 	Expression *Expression `| @@`
 }
 
+// Comparison represents syntax for comparison operations
 type Comparison struct {
 	Pos lexer.Position
 
@@ -69,28 +47,33 @@ type Comparison struct {
 	ArrayComparison  *ArrayComparison  `| @@ ]`
 }
 
+// ScalarComparison represents syntax for scalar comparison
 type ScalarComparison struct {
 	Pos lexer.Position
 
-	Op   *string     `@( ">" | ">" "=" | "<" | "<" "=" | "!" "=" | "=" "=" | "=" "~" | "!" "~" )`
+	Op   *string     `@( ">" "=" | "<" "=" | ">" | "<" | "!" "=" | "=" "=" | "=" "~" | "!" "~" )`
 	Next *Comparison `  @@`
 }
 
+// ArrayComparison represents syntax for array comparison
 type ArrayComparison struct {
 	Pos lexer.Position
 
-	Op    *string ` ( @( "in" | "not" "in" )`
-	Array *Array  `@@ )`
+	Op *string ` ( @( "in" | "not" "in" )`
+	// TODO: FIXME: likely doesn't work with rhs expression
+	Array *Array `@@ )`
 }
 
+// Term is an abstract term allowing optional binary bit operation syntax
 type Term struct {
 	Pos lexer.Position
 
 	Unary *Unary  `@@`
-	Op    *string `[ @( "&" | "|" | "^" )`
+	Op    *string `[ @( "&" | "|" | "^" | "+" )`
 	Next  *Term   `  @@ ]`
 }
 
+// Unary is a unary bit operation syntax
 type Unary struct {
 	Pos lexer.Position
 
@@ -99,6 +82,7 @@ type Unary struct {
 	Value *Value  `| @@`
 }
 
+// Array provides support for array syntax and may contain any valid Values (mixed allowed)
 type Array struct {
 	Pos lexer.Position
 
@@ -107,6 +91,9 @@ type Array struct {
 	Ident *string `| @Ident`
 }
 
+// Value provides support for various value types in expression including
+// integers in various form, strings, function calls, variables and
+// subexpressions
 type Value struct {
 	Pos lexer.Position
 
@@ -119,6 +106,7 @@ type Value struct {
 	Subexpression *Expression `| "(" @@ ")"`
 }
 
+// Call implements function call syntax
 type Call struct {
 	Pos lexer.Position
 

@@ -36,3 +36,33 @@ var (
 
 	pathParser = participle.MustBuild(&PathExpression{}, expressionOptions...)
 )
+
+// ParseExpression parses Expression from a string
+func ParseExpression(s string) (*Expression, error) {
+	expr := &Expression{}
+	err := expressionParser.ParseString(s, expr)
+	if err != nil {
+		return nil, err
+	}
+	return expr, nil
+}
+
+// ParseIterable parses IterableExpression from a string
+func ParseIterable(s string) (*IterableExpression, error) {
+	expr := &IterableExpression{}
+	err := iterableParser.ParseString(s, expr)
+	if err != nil {
+		return nil, err
+	}
+	return expr, nil
+}
+
+// ParsePath parses PathExpression from a string
+func ParsePath(s string) (*PathExpression, error) {
+	expr := &PathExpression{}
+	err := pathParser.ParseString(s, expr)
+	if err != nil {
+		return nil, err
+	}
+	return expr, nil
+}

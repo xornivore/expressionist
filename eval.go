@@ -1,69 +1,98 @@
 package main
 
 import (
-	"reflect"
 	"strconv"
 
 	"github.com/alecthomas/participle/lexer"
 	"github.com/alecthomas/repr"
 )
 
+// Evaluatable abstracts part of an expression that can be evaluated for an instance
 type Evaluatable interface {
-	Evaluate(ctx *Context) (interface{}, error)
+	Evaluate(instance *Instance) (interface{}, error)
 }
 
-type Function func(args ...interface{}) (interface{}, error)
+// Function describes a function callable for an instance
+type Function func(instance *Instance, args ...interface{}) (interface{}, error)
 
-// Context for evaluation.
-type Context struct {
-	// User-provided functions.
-	Functions map[string]Function
+// FunctionMap describes a map of functions
+type FunctionMap map[string]Function
+
+// VarMap describes a map of variables
+type VarMap map[string]interface{}
+
+// Instance for evaluation
+type Instance struct {
+	// Instance functions
+	Functions FunctionMap
 	// Vars defined during evaluation.
-	Vars map[string]interface{}
+	Vars VarMap
 }
 
+// Iterator abstracts iteration over a set of instances for expression evaluation
 type Iterator interface {
-	Next() (*Context, error)
+	Next() (*Instance, error)
 	Done() bool
 }
 
-func (e *IterableExpression) Evaluate(it Iterator) (bool, error) {
-	if e.IterableComparison == nil {
-		result := true
-		err := e.iterate(it, e.Expression, func(ctx *Context, passed bool) bool {
-			if !passed {
-				result = false
-				// first failure terminates the iteration
-				// TODO: add reporting of ctx value here
-				return false
-			}
-			return true
-		})
+// InstanceResult captures an Instance along with the passed or failed status for the result
+type InstanceResult struct {
+	Instance *Instance
+	Passed   bool
+}
 
-		if err != nil {
-			return false, err
-		}
-		return result, nil
+// Evaluate evaluates an iterable expression for an iterator
+func (e *IterableExpression) Evaluate(it Iterator, global *Instance) (*InstanceResult, error) {
+	if e.IterableComparison == nil {
+		return e.iterate(
+			it,
+			e.Expression,
+			func(instance *Instance, passed bool) bool {
+				// First failure stops the iteration
+				return !passed
+			},
+		)
 	}
 
 	if e.IterableComparison.Fn == nil {
-		return false, lexer.Errorf(e.Pos, "expecting function for iterable comparison")
+		return nil, lexer.Errorf(e.Pos, "expecting function for iterable comparison")
 	}
+
+	fn := *e.IterableComparison.Fn
 
 	totalCount := 0
 	passedCount := 0
-	err := e.iterate(it, e.IterableComparison.Expression, func(ctx *Context, passed bool) bool {
-		totalCount++
-		if passed {
-			passedCount++
-		}
-		// TODO: can evaluate some pseudo-function cases here without the need to go through the entire list
-		return true
-	})
+	result, err := e.iterate(
+		it,
+		e.IterableComparison.Expression, func(instance *Instance, passed bool) bool {
+			totalCount++
+			if passed {
+				passedCount++
+				if fn == "any" || fn == "none" {
+					return false
+				}
+			} else if fn == "all" {
+				return false
+			}
+			return true
+		},
+	)
 	if err != nil {
-		return false, err
+		return nil, err
 	}
 
+	passed, err := e.evaluatePassed(global, passedCount, totalCount)
+	if err != nil {
+		return nil, err
+	}
+
+	return &InstanceResult{
+		Instance: result.Instance,
+		Passed:   passed,
+	}, nil
+}
+
+func (e *IterableExpression) evaluatePassed(global *Instance, passedCount, totalCount int) (bool, error) {
 	switch *e.IterableComparison.Fn {
 	case "all":
 		return passedCount == totalCount, nil
@@ -76,61 +105,70 @@ func (e *IterableExpression) Evaluate(it Iterator) (bool, error) {
 
 	case "len":
 		if e.IterableComparison.ScalarComparison == nil {
-			return false, lexer.Errorf(e.Pos, "expecting rhs of len() expression")
+			return false, lexer.Errorf(e.Pos, "expecting rhs of iterable comparison using len()")
 		}
 
 		if e.IterableComparison.ScalarComparison.Op == nil {
-			return false, lexer.Errorf(e.Pos, "expecting operator for len() comparison")
+			return false, lexer.Errorf(e.Pos, "expecting operator for iterable comparison using len()")
 		}
 
-		rhs, err := e.IterableComparison.ScalarComparison.Next.Evaluate(&Context{}) // TODO: need some global context here
+		rhs, err := e.IterableComparison.ScalarComparison.Next.Evaluate(global)
 		if err != nil {
 			return false, err
 		}
 
 		expectedCount, ok := rhs.(int64)
 		if !ok {
-			return false, lexer.Errorf(e.Pos, "expecting rhs for len() iterable comparison to be integer")
+			return false, lexer.Errorf(e.Pos, "expecting an integer rhs for iterable comparison using len()")
 		}
 
-		return compareInts(*e.IterableComparison.ScalarComparison.Op, int64(passedCount), expectedCount, e.Pos)
+		return intCompare(*e.IterableComparison.ScalarComparison.Op, int64(passedCount), expectedCount, e.Pos)
 	default:
-		return false, lexer.Errorf(e.Pos, "unexpected function for iterable comparison %s", *e.IterableComparison.Fn)
+		return false, lexer.Errorf(e.Pos, `unexpected function "%s()" for iterable comparison`, *e.IterableComparison.Fn)
 	}
 }
 
-func (e *IterableExpression) iterate(it Iterator, expression *Expression, check func(ctx *Context, passed bool) bool) error {
+func (e *IterableExpression) iterate(it Iterator, expression *Expression, checkResult func(instance *Instance, passed bool) bool) (*InstanceResult, error) {
+	var (
+		instance *Instance
+		err      error
+		passed   bool
+	)
 	for !it.Done() {
-		ctx, err := it.Next()
+		instance, err = it.Next()
 		if err != nil {
-			return err
+			return nil, err
 		}
 
-		v, err := expression.Evaluate(ctx)
+		v, err := expression.Evaluate(instance)
 		if err != nil {
-			return err
-		}
-		passed, ok := v.(bool)
-		if !ok {
-			return lexer.Errorf(e.Pos, "expected a boolean resuls of evaluation")
+			return nil, err
 		}
 
-		if !check(ctx, passed) {
+		var ok bool
+		if passed, ok = v.(bool); !ok {
+			return nil, lexer.Errorf(e.Pos, "expected a boolean resuls of evaluation")
+		}
+
+		if !checkResult(instance, passed) {
 			break
 		}
 	}
-	return nil
+	return &InstanceResult{
+		Instance: instance,
+		Passed:   passed,
+	}, nil
 }
 
-func (e *PathExpression) Evaluate(ctx *Context) (interface{}, error) {
+func (e *PathExpression) Evaluate(instance *Instance) (interface{}, error) {
 	if e.Path != nil {
 		return *e.Path, nil
 	}
-	return e.Expression.Evaluate(ctx)
+	return e.Expression.Evaluate(instance)
 }
 
-func (e *Expression) Evaluate(ctx *Context) (interface{}, error) {
-	lhs, err := e.Comparison.Evaluate(ctx)
+func (e *Expression) Evaluate(instance *Instance) (interface{}, error) {
+	lhs, err := e.Comparison.Evaluate(instance)
 	if err != nil {
 		return nil, err
 	}
@@ -144,7 +182,7 @@ func (e *Expression) Evaluate(ctx *Context) (interface{}, error) {
 		return nil, lexer.Errorf(e.Pos, "type mismatch, expected bool in lhs of boolean expression")
 	}
 
-	rhs, err := e.Next.Evaluate(ctx)
+	rhs, err := e.Next.Evaluate(instance)
 	if err != nil {
 		return nil, err
 	}
@@ -160,8 +198,8 @@ func (e *Expression) Evaluate(ctx *Context) (interface{}, error) {
 	return nil, lexer.Errorf(e.Pos, "unsupported operator %s in boolean expression", *e.Op)
 }
 
-func (c *Comparison) Evaluate(ctx *Context) (interface{}, error) {
-	lhs, err := c.Term.Evaluate(ctx)
+func (c *Comparison) Evaluate(instance *Instance) (interface{}, error) {
+	lhs, err := c.Term.Evaluate(instance)
 	if err != nil {
 		return nil, err
 	}
@@ -171,22 +209,21 @@ func (c *Comparison) Evaluate(ctx *Context) (interface{}, error) {
 			return nil, lexer.Errorf(c.Pos, "missing rhs of array operation %s", *c.ArrayComparison.Op)
 		}
 
-		rhs, err := c.ArrayComparison.Array.Evaluate(ctx)
+		rhs, err := c.ArrayComparison.Array.Evaluate(instance)
 		if err != nil {
 			return nil, err
 		}
 
 		array, ok := rhs.([]interface{})
 		if !ok {
-			return nil, lexer.Errorf(c.Pos, "expecting rhs of array operation %s to be an array", *c.ArrayComparison.Op)
+			return nil, lexer.Errorf(c.Pos, "rhs of %s array operation must be an array", *c.ArrayComparison.Op)
 		}
 
 		switch *c.ArrayComparison.Op {
 		case "in":
-			return c.inArray(lhs, array)
-
-		case "not in":
-			return c.notInArray(lhs, array)
+			return inArray(lhs, array), nil
+		case "notin":
+			return notInArray(lhs, array), nil
 		default:
 			return nil, lexer.Errorf(c.Pos, "unsupported array operation %s", *c.ArrayComparison.Op)
 		}
@@ -195,7 +232,7 @@ func (c *Comparison) Evaluate(ctx *Context) (interface{}, error) {
 		if c.ScalarComparison.Next == nil {
 			return nil, lexer.Errorf(c.Pos, "missing rhs of %s", *c.ScalarComparison.Op)
 		}
-		rhs, err := c.ScalarComparison.Next.Evaluate(ctx)
+		rhs, err := c.ScalarComparison.Next.Evaluate(instance)
 		if err != nil {
 			return nil, err
 		}
@@ -206,81 +243,39 @@ func (c *Comparison) Evaluate(ctx *Context) (interface{}, error) {
 	}
 }
 
-func (c *Comparison) inArray(value interface{}, array []interface{}) (interface{}, error) {
-	for _, rhs := range array {
-		if reflect.DeepEqual(value, rhs) {
-			return true, nil
-		}
-	}
-	return false, nil
-}
-
-func (c *Comparison) notInArray(value interface{}, array []interface{}) (interface{}, error) {
-	for _, rhs := range array {
-		if reflect.DeepEqual(value, rhs) {
-			return true, nil
-		}
-	}
-	return false, nil
-}
-
 func (c *Comparison) compare(lhs, rhs interface{}, op string) (interface{}, error) {
 	switch lhs := lhs.(type) {
-	case int64:
-
-		rhs, ok := rhs.(int64)
-		if !ok {
+	case uint64:
+		switch rhs := rhs.(type) {
+		case uint64:
+			return uintCompare(op, lhs, rhs, c.Pos)
+		case int64:
+			return uintCompare(op, lhs, uint64(rhs), c.Pos)
+		default:
 			return nil, lexer.Errorf(c.Pos, "rhs of %s must be an integer", op)
 		}
-		return compareInts(op, lhs, rhs, c.Pos)
+	case int64:
+		switch rhs := rhs.(type) {
+		case int64:
+			return intCompare(op, lhs, rhs, c.Pos)
+		case uint64:
+			return intCompare(op, lhs, int64(rhs), c.Pos)
+		default:
+			return nil, lexer.Errorf(c.Pos, "rhs of %s must be an integer", op)
+		}
 	case string:
 		rhs, ok := rhs.(string)
 		if !ok {
 			return nil, lexer.Errorf(c.Pos, "rhs of %s must be a string", op)
 		}
-		switch op {
-		case "==":
-			return lhs == rhs, nil
-		case "!=":
-			return lhs != rhs, nil
-		case "<":
-			return lhs < rhs, nil
-		case ">":
-			return lhs > rhs, nil
-		case "<=":
-			return lhs <= rhs, nil
-		case ">=":
-			return lhs >= rhs, nil
-		default:
-			return nil, lexer.Errorf(c.Pos, "unsupported operator %s for string comparison", op)
-		}
+		return stringCompare(op, lhs, rhs, c.Pos)
 	default:
-		return nil, lexer.Errorf(c.Pos, "lhs of %s must be a number or string", op)
+		return nil, lexer.Errorf(c.Pos, "lhs of %s must be an integer or string", op)
 	}
 }
 
-func compareInts(op string, lhs, rhs int64, pos lexer.Position) (bool, error) {
-	switch op {
-	case "==":
-		return lhs == rhs, nil
-	case "!=":
-		return lhs != rhs, nil
-	case "<":
-		return lhs < rhs, nil
-	case ">":
-		return lhs > rhs, nil
-	case "<=":
-		return lhs <= rhs, nil
-	case ">=":
-		return lhs >= rhs, nil
-
-	default:
-		return false, lexer.Errorf(pos, "unsupported operator %s for integer comparison", op)
-	}
-}
-
-func (t *Term) Evaluate(ctx *Context) (interface{}, error) {
-	lhs, err := t.Unary.Evaluate(ctx)
+func (t *Term) Evaluate(instance *Instance) (interface{}, error) {
+	lhs, err := t.Unary.Evaluate(instance)
 	if err != nil {
 		return nil, err
 	}
@@ -293,44 +288,54 @@ func (t *Term) Evaluate(ctx *Context) (interface{}, error) {
 		return nil, lexer.Errorf(t.Pos, "expected rhs in binary bit operation")
 	}
 
-	rhs, err := t.Next.Evaluate(ctx)
+	rhs, err := t.Next.Evaluate(instance)
 	if err != nil {
 		return nil, err
 	}
 
+	op := *t.Op
+
 	switch lhs := lhs.(type) {
-	case int64:
-		rhs, ok := rhs.(int64)
-		if !ok {
-			return nil, lexer.Errorf(t.Pos, "rhs of %s must be an integer", *t.Op)
-		}
-
-		switch *t.Op {
-		case "&":
-			return lhs & rhs, nil
-		case "|":
-			return lhs | rhs, nil
-		case "^":
-			return lhs ^ rhs, nil
+	case uint64:
+		switch rhs := rhs.(type) {
+		case uint64:
+			return uintBinaryOp(op, lhs, rhs, t.Pos)
+		case int64:
+			return uintBinaryOp(op, lhs, uint64(rhs), t.Pos)
 		default:
-			return nil, lexer.Errorf(t.Pos, "unsupported binary operator %s", *t.Op)
+			return nil, lexer.Errorf(t.Pos, `rhs of %s must be an integer`, op)
 		}
-
+	case int64:
+		switch rhs := rhs.(type) {
+		case int64:
+			return intBinaryOp(op, lhs, rhs, t.Pos)
+		case uint64:
+			return intBinaryOp(op, lhs, int64(rhs), t.Pos)
+		default:
+			return nil, lexer.Errorf(t.Pos, `rhs of %s must be an integer`, op)
+		}
+	case string:
+		switch rhs := rhs.(type) {
+		case string:
+			return stringBinaryOp(op, lhs, rhs, t.Pos)
+		default:
+			return nil, lexer.Errorf(t.Pos, "rhs of %s must be a string", op)
+		}
 	default:
 		return nil, lexer.Errorf(t.Pos, "binary bit operation not supported for this type")
 	}
 }
 
-func (u *Unary) Evaluate(ctx *Context) (interface{}, error) {
+func (u *Unary) Evaluate(instance *Instance) (interface{}, error) {
 	if u.Value != nil {
-		return u.Value.Evaluate(ctx)
+		return u.Value.Evaluate(instance)
 	}
 
 	if u.Unary == nil || u.Op == nil {
 		return nil, lexer.Errorf(u.Pos, "invalid unary operation")
 	}
 
-	rhs, err := u.Unary.Evaluate(ctx)
+	rhs, err := u.Unary.Evaluate(instance)
 	if err != nil {
 		return nil, err
 	}
@@ -343,58 +348,70 @@ func (u *Unary) Evaluate(ctx *Context) (interface{}, error) {
 		}
 		return !rhs, nil
 	case "-":
-		rhs, ok := rhs.(int64)
-		if !ok {
+		switch rhs := rhs.(type) {
+		case int64:
+			return -rhs, nil
+		case uint64:
+			return -int64(rhs), nil
+		default:
 			return nil, lexer.Errorf(u.Pos, "rhs of %s must be an integer", *u.Op)
 		}
-		return -rhs, nil
 	case "^":
-		rhs, ok := rhs.(int64)
-		if !ok {
+		switch rhs := rhs.(type) {
+		case int64:
+			return ^rhs, nil
+		case uint64:
+			return ^rhs, nil
+		default:
 			return nil, lexer.Errorf(u.Pos, "rhs of %s must be an integer", *u.Op)
 		}
-		return ^rhs, nil
 	default:
 		return nil, lexer.Errorf(u.Pos, "unsupported unary operator %s", *u.Op)
 	}
 }
 
-func (v *Value) Evaluate(ctx *Context) (interface{}, error) {
+func (v *Value) Evaluate(instance *Instance) (interface{}, error) {
 	switch {
 	case v.Hex != nil:
-		return strconv.ParseInt(*v.Hex, 0, 64)
+		return strconv.ParseUint(*v.Hex, 0, 64)
 	case v.Octal != nil:
-		return strconv.ParseInt(*v.Octal, 8, 64)
+		return strconv.ParseUint(*v.Octal, 8, 64)
 	case v.Decimal != nil:
 		return *v.Decimal, nil
 	case v.String != nil:
 		return *v.String, nil
 	case v.Variable != nil:
-		value, ok := ctx.Vars[*v.Variable]
-		if !ok {
-			return nil, lexer.Errorf(v.Pos, "unknown variable %q", *v.Variable)
+		var (
+			ok    bool
+			value interface{}
+		)
+		if instance.Vars != nil {
+			value, ok = instance.Vars[*v.Variable]
 		}
-		return value, nil
+		if !ok {
+			return nil, lexer.Errorf(v.Pos, `unknown variable "%s"`, *v.Variable)
+		}
+		return coerceIntegers(value), nil
 	case v.Subexpression != nil:
-		return v.Subexpression.Evaluate(ctx)
+		return v.Subexpression.Evaluate(instance)
 	case v.Call != nil:
-		return v.Call.Evaluate(ctx)
+		return v.Call.Evaluate(instance)
 	}
 
-	return nil, lexer.Errorf(v.Pos, "unsupported value type %s", repr.String(v))
+	return nil, lexer.Errorf(v.Pos, `unsupported value type "%s"`, repr.String(v))
 }
 
-func (a *Array) Evaluate(ctx *Context) (interface{}, error) {
+func (a *Array) Evaluate(instance *Instance) (interface{}, error) {
 	if a.Ident != nil {
-		value, ok := ctx.Vars[*a.Ident]
+		value, ok := instance.Vars[*a.Ident]
 		if !ok {
-			return nil, lexer.Errorf(a.Pos, "unknown variable %q used as array", *a.Ident)
+			return nil, lexer.Errorf(a.Pos, `unknown variable "%s" used as array`, *a.Ident)
 		}
 		return value, nil
 	}
 	var result []interface{}
 	for _, value := range a.Values {
-		v, err := value.Evaluate(ctx)
+		v, err := value.Evaluate(instance)
 		if err != nil {
 			return nil, err
 		}
@@ -403,23 +420,30 @@ func (a *Array) Evaluate(ctx *Context) (interface{}, error) {
 	return result, nil
 }
 
-func (c *Call) Evaluate(ctx *Context) (interface{}, error) {
-	function, ok := ctx.Functions[c.Name]
+func (c *Call) Evaluate(instance *Instance) (interface{}, error) {
+	var (
+		fn Function
+		ok bool
+	)
+	if instance.Functions != nil {
+		fn, ok = instance.Functions[c.Name]
+	}
 	if !ok {
-		return nil, lexer.Errorf(c.Pos, "unknown function %q", c.Name)
+		return nil, lexer.Errorf(c.Pos, `unknown function "%s()"`, c.Name)
 	}
 	args := []interface{}{}
 	for _, arg := range c.Args {
-		value, err := arg.Evaluate(ctx)
+		value, err := arg.Evaluate(instance)
 		if err != nil {
 			return nil, err
 		}
 		args = append(args, value)
 	}
 
-	value, err := function(args...)
+	value, err := fn(instance, args...)
 	if err != nil {
-		return nil, lexer.Errorf(c.Pos, "call to %s() failed", c.Name)
+		return nil, lexer.Errorf(c.Pos, `call to "%s()" failed`, c.Name)
 	}
-	return value, nil
+
+	return coerceIntegers(value), nil
 }
